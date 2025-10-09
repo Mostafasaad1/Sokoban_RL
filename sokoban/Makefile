@@ -10,7 +10,7 @@ all: test_sokoban sokoban_engine$(PYTHON_SUFFIX)
 
 # C++ test executable
 test_sokoban: test_sokoban.cpp sokoban.cpp sokoban.h
-	$(CXX) $(CXXFLAGS) test_sokoban.cpp sokoban.cpp -o test_sokoban
+	$(CXX) $(CXXFLAGS) test_sokoban.cpp sokoban.cpp -o test_sokoban.o
 
 # Python module
 sokoban_engine$(PYTHON_SUFFIX): python_bindings.cpp sokoban.cpp sokoban.h
@@ -23,7 +23,7 @@ sokoban.o: sokoban.cpp sokoban.h
 
 # Run tests
 test: test_sokoban
-	./test_sokoban
+	./test_sokoban.o
 
 # Run Python example (requires Python module)
 example: sokoban_engine$(PYTHON_SUFFIX)
