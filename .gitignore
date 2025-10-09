@@ -46,3 +46,7 @@ testing_log.txt
 
 # trained models
 *.pth
+*.so
+*.o
+*.ink
+
