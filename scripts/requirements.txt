@@ -1,0 +1,5 @@
+# requirements.txt
+gymnasium>=0.28.0
+pybind11
+numpy
+pygame
