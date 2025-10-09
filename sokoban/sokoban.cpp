@@ -77,9 +77,9 @@ void Sokoban::load_level(const std::string& level_str) {
     initialize_buffers();
 }
 
-std::tuple<std::vector<int>, float, bool> Sokoban::step(int action) {
+std::tuple<std::vector<int>, float, bool, bool> Sokoban::step(int action) {
     if (!is_valid_action(action)) {
-        return {get_observation(), 0.0f, false};
+        return {get_observation(), 0.0f, false, false};
     }
     
     auto [dx, dy] = get_direction_offset(action);
@@ -89,10 +89,11 @@ std::tuple<std::vector<int>, float, bool> Sokoban::step(int action) {
     assert(is_valid_position(new_x, new_y));
     
     const int target_tile = grid_[new_y][new_x];
+    bool box_pushed = false;  // ← New flag
     
     // Handle wall collision
     if (target_tile == WALL) {
-        return {get_observation(), 0.0f, false};
+        return {get_observation(), 0.0f, false, false};
     }
     
     // Handle box pushing
@@ -102,11 +103,12 @@ std::tuple<std::vector<int>, float, bool> Sokoban::step(int action) {
         
         if (!is_valid_position(box_new_x, box_new_y) || 
             !can_push_box_to(box_new_x, box_new_y)) {
-            return {get_observation(), 0.0f, false};
+            return {get_observation(), 0.0f, false, false};
         }
         
         // Execute box move
         move_box(new_x, new_y, box_new_x, box_new_y);
+        box_pushed = true;  // ← Mark that a box was pushed
     }
     
     // Execute player move
@@ -118,9 +120,8 @@ std::tuple<std::vector<int>, float, bool> Sokoban::step(int action) {
     const bool solved = is_solved();
     const float reward = solved ? 1.0f : 0.0f;
     
-    return {get_observation(), reward, solved};
+    return {get_observation(), reward, solved, box_pushed};
 }
-
 std::vector<int> Sokoban::get_observation() const {
     // Use pre-allocated buffer to avoid allocation
     observation_buffer_.clear();

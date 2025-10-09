@@ -1,62 +1,57 @@
-# sokoban_env.py
 import gymnasium as gym
 import numpy as np
-import sokoban_engine as soko
 import pygame
 
-WALL = soko.WALL
-EMPTY = soko.EMPTY
-PLAYER = soko.PLAYER
-BOX = soko.BOX
-TARGET = soko.TARGET
-BOX_ON_TARGET = soko.BOX_ON_TARGET
-PLAYER_ON_TARGET = soko.PLAYER_ON_TARGET
-
+# Constants will be imported from the compiled module
 class SokobanEnv(gym.Env):
     metadata = {"render_modes": ["human", "ansi"], "render_fps": 5}
 
     def __init__(self, render_mode=None):
-        self.game = soko.Sokoban()
-        self.observation_space = gym.spaces.Box(low=0, high=6, shape=(100,), dtype=np.int32)
+        # Import here to avoid issues during compilation
+        import sokoban_engine
+        self.sokoban_engine = sokoban_engine
+
+        self.game = sokoban_engine.Sokoban()
+
+        # Get actual observation dimensions
+        obs = self.game.get_observation()
+        self.obs_dim = len(obs)
+
+        self.observation_space = gym.spaces.Box(low=0, high=6, shape=(self.obs_dim,), dtype=np.int32)
         self.action_space = gym.spaces.Discrete(4)
-        
+
         self.render_mode = render_mode
         self.window = None
         self.clock = None
         self._current_obs = None
-        self.grid_shape = (10, 10)  # Default 10x10 grid
         self.window_size = 600
-        self.tile_size = self.window_size // self.grid_shape[1]
-        
+
         if self.render_mode not in self.metadata["render_modes"] + [None]:
             raise ValueError(f"Invalid render_mode: {self.render_mode}")
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.game.reset()  # This returns void, so don't assign to grid
-        grid = self.game.get_observation()  # Get the observation after reset
+        self.game.reset()
+        grid = self.game.get_observation()
         self._current_obs = np.array(grid, dtype=np.int32)
+
+        # Update grid dimensions
+        self.grid_width = self.game.get_width()
+        self.grid_height = self.game.get_height()
+        self.tile_size = min(self.window_size // self.grid_width, self.window_size // self.grid_height)
+
         if self.render_mode == "human":
             self.render()
         return self._current_obs, {}
 
     def step(self, action):
-        grid, reward, terminated, box_pushed = self.game.step(action)
+        grid, reward, terminated = self.game.step(action)
         self._current_obs = np.array(grid, dtype=np.int32)
-        
-        # Improved reward shaping
-        shaped_reward = 0.0
-        if box_pushed:
-            shaped_reward = 0.1  # Small reward for pushing boxes
-        if terminated:
-            shaped_reward += 1.0  # Large reward for solving level
-        
-        total_reward = reward + shaped_reward
-        
         truncated = False
+        info = {}
         if self.render_mode == "human":
             self.render()
-        return self._current_obs, total_reward, terminated, truncated, {}
+        return self._current_obs, reward, terminated, truncated, info
 
     def render(self):
         if self.render_mode == "human":
@@ -74,33 +69,27 @@ class SokobanEnv(gym.Env):
 
         self.window.fill((255, 255, 255))
 
-        # Update grid_shape based on actual game dimensions
-        width = self.game.get_width()
-        height = self.game.get_height()
-        self.grid_shape = (height, width)
-        self.tile_size = min(self.window_size // width, self.window_size // height)
-        
-        grid = self._current_obs.reshape(self.grid_shape)
-        for row in range(self.grid_shape[0]):
-            for col in range(self.grid_shape[1]):
+        grid = self._current_obs.reshape((self.grid_height, self.grid_width))
+        for row in range(self.grid_height):
+            for col in range(self.grid_width):
                 tile = grid[row, col]
                 x = col * self.tile_size
                 y = row * self.tile_size
                 rect = pygame.Rect(x, y, self.tile_size, self.tile_size)
 
                 # Determine base color
-                is_target = tile in [TARGET, BOX_ON_TARGET, PLAYER_ON_TARGET]
+                is_target = tile in [self.sokoban_engine.TARGET, self.sokoban_engine.BOX_ON_TARGET, self.sokoban_engine.PLAYER_ON_TARGET]
                 base_color = (144, 238, 144) if is_target else (255, 255, 255)
                 pygame.draw.rect(self.window, base_color, rect)
 
                 # Draw objects
-                if tile == WALL:
+                if tile == self.sokoban_engine.WALL:
                     pygame.draw.rect(self.window, (100, 100, 100), rect)
-                elif tile == BOX:
+                elif tile == self.sokoban_engine.BOX:
                     pygame.draw.rect(self.window, (165, 42, 42), rect)
-                elif tile == BOX_ON_TARGET:
+                elif tile == self.sokoban_engine.BOX_ON_TARGET:
                     pygame.draw.rect(self.window, (0, 128, 0), rect)
-                elif tile in [PLAYER, PLAYER_ON_TARGET]:
+                elif tile in [self.sokoban_engine.PLAYER, self.sokoban_engine.PLAYER_ON_TARGET]:
                     center = (x + self.tile_size // 2, y + self.tile_size // 2)
                     radius = self.tile_size // 2 - 5
                     pygame.draw.circle(self.window, (0, 0, 255), center, radius)
@@ -114,41 +103,23 @@ class SokobanEnv(gym.Env):
     def _render_ansi(self):
         if self._current_obs is None:
             return ""
-        
-        width = self.game.get_width()
-        height = self.game.get_height()
-        grid = self._current_obs.reshape((height, width))
-        
+
+        grid = self._current_obs.reshape((self.grid_height, self.grid_width))
+
         chars = {
-            WALL: '#',
-            EMPTY: ' ',
-            PLAYER: '@',
-            BOX: '$',
-            TARGET: '.',
-            BOX_ON_TARGET: '*',
-            PLAYER_ON_TARGET: '+',
+            self.sokoban_engine.WALL: '#',
+            self.sokoban_engine.EMPTY: ' ',
+            self.sokoban_engine.PLAYER: '@',
+            self.sokoban_engine.BOX: '$',
+            self.sokoban_engine.TARGET: '.',
+            self.sokoban_engine.BOX_ON_TARGET: '*',
+            self.sokoban_engine.PLAYER_ON_TARGET: '+',
         }
-        
+
         result = []
         for row in grid:
             result.append(''.join(chars.get(cell, '?') for cell in row))
         return '\n'.join(result)
-
-    # Add this to your SokobanEnv class
-    def set_level_difficulty(self, difficulty):
-        """Set different levels based on difficulty"""
-        levels = [
-            # Easy level - single box close to target
-            "#####\n#@$.#\n#####",
-            # Medium level - default 7x7
-            "#######\n#  .  #\n# $ @ #\n#     #\n# $   #\n#  .  #\n#######",
-            # Hard level - more complex
-            "########\n#  @   #\n# $ $  #\n#  . . #\n########"
-        ]
-        
-        level_idx = min(difficulty, len(levels) - 1)
-        self.game.load_level(levels[level_idx])
-        self.grid_shape = (self.game.get_height(), self.game.get_width())
 
     def close(self):
         if self.window is not None:

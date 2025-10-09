@@ -171,7 +171,7 @@ def main():
             done = terminated or truncated
             
             # Optional: print step info
-            if args.render and steps % 10 == 0:  # Print every 10 steps to avoid clutter
+            if args.render and steps % 1 == 0:  # Print every 10 steps to avoid clutter
                 print(f"Step {steps}: Action={action}, Reward={reward}, Total={total_reward}")
         
         # Track metrics

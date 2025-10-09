@@ -49,15 +49,16 @@ TEST(basic_movement) {
     game.load_level(simple_level);
     
     // Test valid movement
-    auto [obs1, reward1, done1] = game.step(Sokoban::RIGHT);
+    auto [obs1, reward1, done1, pushed1] = game.step(Sokoban::RIGHT);
     assert(reward1 == 0.0f);
     assert(!done1);
-    
+    assert(!pushed1);
+
     auto [px, py] = game.get_player_position();
     assert(px == 2);
     
     // Test wall collision
-    auto [obs2, reward2, done2] = game.step(Sokoban::UP);
+    auto [obs2, reward2, done2, pushed2] = game.step(Sokoban::UP);
     assert(reward2 == 0.0f);
     auto [px2, py2] = game.get_player_position();
     assert(px2 == 2);  // Should not move
@@ -73,9 +74,10 @@ TEST(box_pushing) {
     game.load_level(level);
     
     // Push box to the right
-    auto [obs, reward, done] = game.step(Sokoban::RIGHT);
+    auto [obs, reward, done, pushed] = game.step(Sokoban::RIGHT);
     assert(reward == 0.0f);
-    
+    assert(pushed);
+
     auto grid = game.get_grid();
     assert(grid[1][1] == Sokoban::EMPTY);     // Player was here
     assert(grid[1][2] == Sokoban::PLAYER);    // Player moved here
@@ -92,12 +94,14 @@ TEST(box_on_target) {
     game.load_level(level);
     
     // Push box onto target
-    auto [obs1, reward1, done1] = game.step(Sokoban::RIGHT);
+    auto [obs1, reward1, done1, pushed1] = game.step(Sokoban::RIGHT);
     assert(!done1);
-    
-    auto [obs2, reward2, done2] = game.step(Sokoban::RIGHT);
+    assert(pushed1);
+
+    auto [obs2, reward2, done2, pushed2] = game.step(Sokoban::RIGHT);
     assert(reward2 == 1.0f);  // Should be solved
     assert(done2);
+    assert(pushed2);
     assert(game.is_solved());
 }
 

@@ -36,7 +36,8 @@ public:
     
     void reset();
     void load_level(const std::string& level_str);
-    std::tuple<std::vector<int>, float, bool> step(int action);
+    // std::tuple<std::vector<int>, float, bool> step(int action);
+    std::tuple<std::vector<int>, float, bool, bool> step(int action); // (obs, reward, done, box_pushed)
     std::vector<int> get_observation() const;
     std::vector<std::vector<int>> get_grid() const;
     bool is_solved() const;
