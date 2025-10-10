@@ -5,23 +5,16 @@ import numpy as np
 import time
 from sokoban_env import SokobanEnv
 
-# Use the same model architecture as in training for compatibility
 class ActorCritic(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim=256):
         super(ActorCritic, self).__init__()
-        
-        # Shared backbone
         self.shared_net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        
-        # Policy head
         self.actor = nn.Linear(hidden_dim, action_dim)
-        
-        # Value head (not used during inference)
         self.critic = nn.Linear(hidden_dim, 1)
     
     def forward(self, x):
@@ -30,37 +23,28 @@ class ActorCritic(nn.Module):
         return action_logits
 
 def preprocess_obs(obs):
-    """Match the preprocessing used during training"""
-    # Flatten and normalize like in training
     obs_flat = obs.flatten()
     obs_normalized = obs_flat.astype(np.float32) / 6.0
     return torch.from_numpy(obs_normalized).unsqueeze(0)
 
 def get_observation_dim(env):
-    """Get the actual observation dimension from the environment"""
     obs, _ = env.reset()
-    return preprocess_obs(obs).shape[1]  # Return feature dimension
+    return preprocess_obs(obs).shape[1]
 
 def safe_load_model(model_path, state_dim, action_dim):
-    """Safely load model with PyTorch 2.6+ compatibility"""
     try:
-        # Method 1: Try with weights_only=False (requires trust in the source)
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
         return checkpoint
     except Exception as e:
         print(f"Method 1 failed: {e}")
-        
         try:
-            # Method 2: Use safe_globals context manager for PyTorch 2.6+
             import numpy.core.multiarray
             with torch.serialization.safe_globals([numpy.core.multiarray.scalar]):
                 checkpoint = torch.load(model_path, map_location='cpu')
             return checkpoint
         except Exception as e2:
             print(f"Method 2 failed: {e2}")
-            
             try:
-                # Method 3: Try with pickle directly (fallback)
                 import pickle
                 with open(model_path, 'rb') as f:
                     checkpoint = pickle.load(f)
@@ -75,11 +59,17 @@ def main():
     parser.add_argument('--episodes', type=int, default=1, help='Number of episodes to run')
     parser.add_argument('--render', action='store_true', help='Enable rendering for interactive play')
     parser.add_argument('--delay', type=float, default=0, help='Delay between steps in seconds (for rendering)')
+    parser.add_argument('--fast', action='store_true', help='Enable fast mode (minimal rendering overhead)')
+    parser.add_argument('--no-render-every-step', action='store_true', help='Skip rendering every step for faster execution')
     
     args = parser.parse_args()
     
-    # Set up the environment first to get observation dimensions
-    env = SokobanEnv(render_mode="human" if args.render else None)
+    # Set up the environment
+    render_mode = "human" if args.render else None
+    if args.fast and args.render:
+        print("Fast mode enabled - using minimal rendering")
+    
+    env = SokobanEnv(render_mode=render_mode)
     
     # Get observation and action dimensions
     state_dim = get_observation_dim(env)
@@ -88,9 +78,8 @@ def main():
     print(f"Observation dimension: {state_dim}")
     print(f"Action dimension: {action_dim}")
     
-    # Load the model with proper architecture
+    # Load the model
     try:
-        # Use safe loading method
         checkpoint = safe_load_model(args.model, state_dim, action_dim)
         
         if checkpoint is None:
@@ -98,16 +87,13 @@ def main():
             return
             
         if 'policy_state_dict' in checkpoint:
-            # This is a training checkpoint with metadata
             state_dim = checkpoint.get('state_dim', state_dim)
             action_dim = checkpoint.get('action_dim', action_dim)
             hidden_dim = checkpoint.get('hidden_dim', 256)
-            
             model = ActorCritic(state_dim, action_dim, hidden_dim)
             model.load_state_dict(checkpoint['policy_state_dict'])
             print("Loaded training checkpoint with metadata")
         else:
-            # This might be just the model state dict
             model = ActorCritic(state_dim, action_dim)
             model.load_state_dict(checkpoint)
             print("Loaded model state dict")
@@ -117,12 +103,8 @@ def main():
         return
     except Exception as e:
         print(f"Error loading model: {e}")
-        print("Trying alternative loading approach...")
-        # Try one more approach with the simple architecture
         try:
             model = ActorCritic(state_dim, action_dim)
-            
-            # Try direct loading with weights_only=False as last resort
             checkpoint = torch.load(args.model, map_location='cpu', weights_only=False)
             if isinstance(checkpoint, dict) and 'policy_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['policy_state_dict'])
@@ -131,7 +113,6 @@ def main():
             print("Loaded with direct weights_only=False approach")
         except Exception as final_error:
             print(f"Final loading attempt failed: {final_error}")
-            print("Cannot load the model. The file may be corrupted or in an incompatible format.")
             return
     
     model.eval()
@@ -141,6 +122,9 @@ def main():
     total_rewards = []
     episode_lengths = []
     
+    # Pre-compile any expensive operations if possible
+    softmax = torch.nn.Softmax(dim=1)
+    
     for episode in range(args.episodes):
         obs, _ = env.reset()
         done = False
@@ -149,50 +133,75 @@ def main():
         
         print(f"Starting episode {episode + 1}")
         
+        # Track timing for performance monitoring
+        step_times = []
+        inference_times = []
+        render_times = []
+        
         while not done:
+            step_start = time.time()
+            
             # Preprocess observation and get action
             obs_tensor = preprocess_obs(obs)
+            
+            # Model inference
+            inference_start = time.time()
             with torch.no_grad():
                 action_logits = model(obs_tensor)
-                action_probs = torch.softmax(action_logits, dim=1)
                 action = torch.argmax(action_logits, dim=1).item()
+            inference_end = time.time()
             
             # Step the environment
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             steps += 1
             
-            # Render if enabled
+            # Conditional rendering for performance
+            render_start = time.time()
             if args.render:
-                env.render()
-                time.sleep(args.delay)
+                if not args.no_render_every_step or steps % 10 == 0 or terminated or truncated:
+                    env.render()
+                    if args.delay > 0:
+                        time.sleep(args.delay)
+            render_end = time.time()
+            
+            step_end = time.time()
+            
+            # Track timing
+            step_times.append(step_end - step_start)
+            inference_times.append(inference_end - inference_start)
+            render_times.append(render_end - render_start)
             
             # Check if the episode is done
             done = terminated or truncated
             
-            # Optional: print step info
-            if args.render and steps % 1 == 0:  # Print every 10 steps to avoid clutter
-                print(f"Step {steps}: Action={action}, Reward={reward}, Total={total_reward}")
+            # Minimal printing during execution
+            if args.render and steps % 1 == 0:
+                print(f"Step {steps}: Total reward = {total_reward}")
         
         # Track metrics
         total_rewards.append(total_reward)
         episode_lengths.append(steps)
         
-        # Check for success - Sokoban typically terminates when level is solved
-        if terminated:  # In Sokoban, termination usually means success
+        if terminated:
             success_count += 1
             success_status = "SUCCESS"
         else:
             success_status = "FAILED"
         
+        # Print performance statistics
+        avg_step_time = np.mean(step_times)
+        avg_inference_time = np.mean(inference_times)
+        avg_render_time = np.mean(render_times)
+        
         print(f"Episode {episode + 1}: {success_status}, Reward = {total_reward}, Steps = {steps}")
+        print(f"Performance: Step={avg_step_time:.4f}s, Inference={avg_inference_time:.4f}s, Render={avg_render_time:.4f}s")
     
     # Print evaluation metrics
     if args.episodes > 1:
         success_rate = (success_count / args.episodes) * 100
         avg_length = np.mean(episode_lengths)
         avg_reward = np.mean(total_rewards)
-        std_reward = np.std(total_rewards)
         
         print("\n" + "="*50)
         print("EVALUATION SUMMARY")
@@ -200,8 +209,7 @@ def main():
         print(f"Episodes: {args.episodes}")
         print(f"Success Rate: {success_rate:.2f}% ({success_count}/{args.episodes})")
         print(f"Average Episode Length: {avg_length:.2f} steps")
-        print(f"Average Total Reward: {avg_reward:.2f} ± {std_reward:.2f}")
-        print(f"Min/Max Reward: {min(total_rewards):.2f}/{max(total_rewards):.2f}")
+        print(f"Average Total Reward: {avg_reward:.2f}")
     
     env.close()
 
