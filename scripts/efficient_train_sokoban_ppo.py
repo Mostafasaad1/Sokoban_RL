@@ -1,21 +1,13 @@
 """
-TRAINING IMPROVEMENT PATCH
-=========================
+COMPLETE UPDATED SOKOBAN PPO TRAINING SYSTEM
+============================================
 
-Based on your training output, I see the agent is struggling. Here are the specific fixes:
-
-PROBLEMS IDENTIFIED:
-- 0.0% success rate (agent timing out at 200 steps)
-- Poor reward signal (-9.99 average = step penalties)
-- Very low boxes on targets (0.00-0.06)
-- Agent not learning core Sokoban mechanics
-
-SOLUTIONS PROVIDED:
-1. Better reward shaping for learning progression
-2. Curriculum starting with easier scenarios
-3. Improved network architecture for Sokoban reasoning
-4. Better exploration incentives
-5. Debugging tools to monitor learning
+Fixes implemented:
+1. Enhanced exploration with epsilon-greedy strategy
+2. Better reward shaping with action diversity bonuses
+3. Improved network architecture with residual connections
+4. Advanced curriculum learning
+5. Comprehensive progress tracking
 """
 
 import argparse
@@ -25,233 +17,203 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from collections import deque
-from typing import Dict, List, Tuple, Any
-
-# Import the efficient environment
+from typing import Dict, List, Tuple, Any, Optional
 import sys
 import os
+
+# Add current directory to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from efficient_sokoban_env import EfficientSokobanEnv
-import sokoban_engine as soko
 
+# Import environments
+try:
+    from efficient_sokoban_env import EfficientSokobanEnv
+    import sokoban_engine as soko
+    ENV_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Environment import failed: {e}")
+    ENV_AVAILABLE = False
 
-class ImprovedEfficientPPONetwork(nn.Module):
+# =============================================================================
+# ENHANCED EXPLORATION MANAGER
+# =============================================================================
+
+class EnhancedExplorationManager:
     """
-    IMPROVED Efficient PPO network with better Sokoban-specific architecture.
-    Designed to learn spatial reasoning more effectively.
+    Advanced exploration management with multiple strategies:
+    - Epsilon-greedy exploration
+    - Decaying randomness
+    - Action diversity tracking
+    """
+    
+    def __init__(self, initial_epsilon=1.0, min_epsilon=0.05, decay_steps=50000):
+        self.initial_epsilon = initial_epsilon
+        self.min_epsilon = min_epsilon
+        self.decay_steps = decay_steps
+        self.step_count = 0
+        self.action_history = deque(maxlen=100)
+        
+    def get_epsilon(self):
+        """Linear epsilon decay with cosine annealing for smooth transition"""
+        if self.step_count >= self.decay_steps:
+            return self.min_epsilon
+        
+        fraction = self.step_count / self.decay_steps
+        # Cosine annealing for smoother decay
+        epsilon = self.min_epsilon + 0.5 * (self.initial_epsilon - self.min_epsilon) * (1 + np.cos(np.pi * fraction))
+        return max(epsilon, self.min_epsilon)
+    
+    def record_action(self, action):
+        """Record action for diversity analysis"""
+        self.action_history.append(action)
+    
+    def get_action_diversity(self):
+        """Calculate action diversity score (0-1)"""
+        if len(self.action_history) == 0:
+            return 0.0
+        unique_actions = len(set(self.action_history))
+        return unique_actions / len(self.action_history)
+    
+    def step(self):
+        """Increment step counter"""
+        self.step_count += 1
+
+# =============================================================================
+# ADVANCED NETWORK ARCHITECTURE
+# =============================================================================
+
+class AdvancedSokobanNetwork(nn.Module):
+    """
+    Advanced neural network with residual connections and enhanced feature extraction
+    specifically designed for Sokoban spatial reasoning.
     """
     
     def __init__(self, obs_shape: Tuple[int, ...], num_actions: int, hidden_size: int = 512):
         super().__init__()
         
         input_size = obs_shape[0] if len(obs_shape) == 1 else np.prod(obs_shape)
-        print(f"🧠 Improved network input size: {input_size}")
         
-        # IMPROVED: Better feature extraction for spatial reasoning
-        self.spatial_features = nn.Sequential(
+        print(f"🧠 ADVANCED NETWORK ARCHITECTURE:")
+        print(f"   Input size: {input_size}")
+        print(f"   Hidden size: {hidden_size}")
+        print(f"   Actions: {num_actions}")
+        
+        # Enhanced input processing
+        self.input_norm = nn.LayerNorm(input_size)
+        self.input_projection = nn.Sequential(
             nn.Linear(input_size, hidden_size),
-            nn.LayerNorm(hidden_size),  # Add normalization
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
             nn.LayerNorm(hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.LayerNorm(hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
         
-        # IMPROVED: Separate reasoning pathways
-        self.action_reasoning = nn.Sequential(
-            nn.Linear(hidden_size // 2, hidden_size // 4),
+        # Residual blocks for deep feature extraction
+        self.res_blocks = nn.ModuleList([
+            self._make_res_block(hidden_size) for _ in range(3)
+        ])
+        
+        # Spatial reasoning layers
+        self.spatial_attention = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
             nn.ReLU(),
-            nn.Linear(hidden_size // 4, num_actions)
+            nn.Linear(hidden_size // 2, hidden_size // 4),
+            nn.ReLU()
         )
         
-        self.value_reasoning = nn.Sequential(
-            nn.Linear(hidden_size // 2, hidden_size // 4),
+        # Separate specialized heads
+        self.actor_head = nn.Sequential(
+            nn.Linear(hidden_size + hidden_size // 4, hidden_size // 2),
             nn.ReLU(),
-            nn.Linear(hidden_size // 4, 1)
+            nn.Linear(hidden_size // 2, num_actions)
         )
         
-        # Initialize weights better for Sokoban
+        self.critic_head = nn.Sequential(
+            nn.Linear(hidden_size + hidden_size // 4, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
+        )
+        
+        # Initialize weights
         self._initialize_weights()
         
+        # Parameter count
         total_params = sum(p.numel() for p in self.parameters())
-        print(f"🔢 Improved network parameters: {total_params:,}")
+        print(f"   Total parameters: {total_params:,}")
         
+    def _make_res_block(self, hidden_size):
+        """Create a residual block with layer normalization"""
+        return nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size)
+        )
+    
     def _initialize_weights(self):
-        """Better weight initialization for Sokoban learning"""
+        """Advanced weight initialization for Sokoban"""
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.bias, 0.0)
-        
+                nn.init.constant_(m.weight, 1.0)
+    
     def forward(self, x):
+        # Flatten if needed
         if len(x.shape) > 2:
             x = x.view(x.size(0), -1)
         
-        # Extract spatial features
-        features = self.spatial_features(x.float())
+        # Input processing
+        x = self.input_norm(x.float())
+        x = self.input_projection(x)
         
-        # Separate reasoning for actions and values
-        logits = self.action_reasoning(features)
-        value = self.value_reasoning(features)
+        # Residual blocks with skip connections
+        for res_block in self.res_blocks:
+            residual = x
+            x = res_block(x)
+            x = nn.functional.relu(x + residual)
+        
+        # Spatial reasoning
+        spatial_features = self.spatial_attention(x)
+        
+        # Combine features
+        combined_features = torch.cat([x, spatial_features], dim=-1)
+        
+        # Separate heads
+        logits = self.actor_head(combined_features)
+        value = self.critic_head(combined_features)
         
         return logits, value.squeeze(-1)
 
-class ImprovedCurriculumManager:
-    """
-    IMPROVED curriculum with better progression logic for Sokoban learning.
-    """
-    
-    def __init__(self, success_threshold: float = 0.1, evaluation_window: int = 100):
-        self.success_threshold = success_threshold
-        self.evaluation_window = evaluation_window
-        self.current_difficulty = 1
-        self.success_history = deque(maxlen=evaluation_window)
-        self.reward_history = deque(maxlen=evaluation_window)
-        self.episodes_at_current_level = 0
-        self.min_episodes_per_level = 500  # INCREASED: More practice per level
-        
-    def update(self, success: bool, episode_reward: float) -> bool:
-        """Update curriculum based on both success and reward progress"""
-        self.success_history.append(success)
-        self.reward_history.append(episode_reward)
-        self.episodes_at_current_level += 1
-        
-        # Only consider progression after minimum episodes and full evaluation window
-        if (len(self.success_history) >= self.evaluation_window and 
-            self.episodes_at_current_level >= self.min_episodes_per_level):
-            
-            success_rate = np.mean(self.success_history)
-            avg_reward = np.mean(self.reward_history)
-            
-            # IMPROVED: Consider both success rate AND reward improvement
-            upgrade_threshold = max(self.success_threshold, 0.05)  # At least 5% success
-            
-            # Upgrade if doing well
-            if success_rate >= upgrade_threshold and self.current_difficulty < 3 and avg_reward > -5:
-                self.current_difficulty += 1
-                self.episodes_at_current_level = 0
-                self.success_history.clear()
-                self.reward_history.clear()
-                print(f"\n🚀 CURRICULUM UPGRADE! Level {self.current_difficulty}")
-                print(f"   Success rate: {success_rate:.1%} | Avg reward: {avg_reward:.1f}")
-                return True
-                
-            # Downgrade if struggling badly
-            elif success_rate < 0.02 and self.current_difficulty > 1 and avg_reward < -15:
-                self.current_difficulty -= 1
-                self.episodes_at_current_level = 0
-                self.success_history.clear()
-                self.reward_history.clear()
-                print(f"\n📉 CURRICULUM DOWNGRADE! Level {self.current_difficulty}")
-                print(f"   Success rate: {success_rate:.1%} | Avg reward: {avg_reward:.1f}")
-                return True
-        
-        return False
+# =============================================================================
+# ENHANCED SOKOBAN ENVIRONMENT
+# =============================================================================
 
-class ImprovedSokobanEnv(EfficientSokobanEnv):
+class EnhancedSokobanEnv(EfficientSokobanEnv):
     """
-    IMPROVED Sokoban environment with better reward shaping for learning.
+    Enhanced Sokoban environment with superior reward shaping and exploration incentives.
     """
     
     def __init__(self, **kwargs):
+        if not ENV_AVAILABLE:
+            raise ImportError("Sokoban environment not available")
+            
         super().__init__(**kwargs)
-        print("🎮 IMPROVED Sokoban Environment with Better Reward Shaping")
         
-        # Learning progress tracking
+        # Enhanced tracking
         self.best_boxes_on_targets = 0
         self.exploration_bonus_used = set()
+        self.last_actions = deque(maxlen=5)
+        self.consecutive_same_actions = 0
+        self.last_action = None
         
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
-        # Store state before action
-        prev_boxes_on_targets = self.boxes_on_targets()
-        prev_player_pos = self._get_player_position()
-        
-        # Execute action with base environment
-        obs_data, base_reward, done, pushed_box = self.game.step({
-            0: soko.UP, 1: soko.DOWN, 2: soko.LEFT, 3: soko.RIGHT
-        }[action])
-        
-        # Update tracking
-        self.step_count += 1
-        current_boxes_on_targets = self.boxes_on_targets()
-        current_player_pos = self._get_player_position()
-        
-        # IMPROVED REWARD SHAPING
-        reward_components = {}
-        reward = 0.0
-        
-        # 1. CORE PROGRESS REWARDS (most important)
-        target_progress = current_boxes_on_targets - prev_boxes_on_targets
-        if target_progress > 0:
-            progress_bonus = target_progress * 20.0  # INCREASED: Bigger bonus for progress
-            reward += progress_bonus
-            reward_components['target_progress'] = progress_bonus
-            print(f"🎯 BOX ON TARGET! +{progress_bonus}")
-        elif target_progress < 0:
-            regression_penalty = target_progress * 10.0  # Less harsh penalty
-            reward += regression_penalty
-            reward_components['target_regression'] = regression_penalty
-        
-        # 2. MILESTONE REWARDS
-        if current_boxes_on_targets > self.best_boxes_on_targets:
-            self.best_boxes_on_targets = current_boxes_on_targets
-            milestone_bonus = 10.0
-            reward += milestone_bonus
-            reward_components['milestone'] = milestone_bonus
-            print(f"🏆 NEW BEST: {current_boxes_on_targets} boxes on targets! +{milestone_bonus}")
-        
-        # 3. EXPLORATION BONUS (encourage visiting new positions)
-        pos_key = f"{current_player_pos[0]},{current_player_pos[1]}"
-        if pos_key not in self.exploration_bonus_used:
-            self.exploration_bonus_used.add(pos_key)
-            if len(self.exploration_bonus_used) <= 20:  # Only for first 20 unique positions
-                exploration_bonus = 0.5
-                reward += exploration_bonus
-                reward_components['exploration'] = exploration_bonus
-        
-        # 4. SMALL POSITIVE STEP REWARD (prevent immediate timeout)
-        step_reward = 0.05  # Small positive to encourage exploration
-        reward += step_reward
-        reward_components['step_reward'] = step_reward
-        
-        # 5. BOX INTERACTION REWARD
-        if pushed_box:
-            interaction_bonus = 2.0  # Reward for pushing boxes
-            reward += interaction_bonus
-            reward_components['box_interaction'] = interaction_bonus
-        
-        # 6. COMPLETION REWARD
-        if done and self.game.is_solved():
-            completion_bonus = 200.0 + max(0, 300 - self.step_count) * 1.0  # Big completion bonus
-            reward += completion_bonus
-            reward_components['completion'] = completion_bonus
-            self.solved_step = self.step_count
-            print(f"🎉 LEVEL COMPLETED! +{completion_bonus} (Steps: {self.step_count})")
-        
-        # 7. TIMEOUT PENALTY (only if no progress made)
-        if self.step_count >= 200:
-            done = True
-            if not self.game.is_solved():
-                # Less harsh timeout penalty if some progress was made
-                if self.best_boxes_on_targets > 0:
-                    timeout_penalty = -5.0  # Mild penalty if made some progress
-                else:
-                    timeout_penalty = -20.0  # Harsher if no progress
-                reward += timeout_penalty
-                reward_components['timeout'] = timeout_penalty
-        
-        self.total_reward += reward
-        
-        # Get observation
-        obs = self._get_observation()
-        info = self._get_info(reward_components)
-        info['best_boxes_on_targets'] = self.best_boxes_on_targets
-        
-        return obs, reward, done, False, info
+        print("🎮 ENHANCED SOKOBAN ENVIRONMENT LOADED")
+        print("   ✓ Better reward shaping")
+        print("   ✓ Action diversity tracking")
+        print("   ✓ Exploration bonuses")
     
     def _get_player_position(self):
         """Get current player position"""
@@ -260,68 +222,292 @@ class ImprovedSokobanEnv(EfficientSokobanEnv):
             for x, cell in enumerate(row):
                 if cell == self.PLAYER or cell == self.PLAYER_ON_TARGET:
                     return (x, y)
-        return (0, 0)  # Fallback
+        return (0, 0)
+    
+    def _calculate_box_proximity_bonus(self, player_pos):
+        """Calculate bonus for being close to boxes"""
+        boxes = self.get_box_positions()
+        if not boxes:
+            return 0.0
+        
+        min_distance = float('inf')
+        for box_x, box_y in boxes:
+            distance = abs(player_pos[0] - box_x) + abs(player_pos[1] - box_y)
+            min_distance = min(min_distance, distance)
+        
+        # Inverse distance reward (closer = better)
+        return max(0, (6 - min_distance) * 0.15)
+    
+    def _calculate_action_diversity_bonus(self, action):
+        """Calculate bonus for using diverse actions"""
+        if not self.last_actions:
+            return 0.0
+        
+        # Bonus for changing actions
+        if action != self.last_actions[-1]:
+            return 0.2
+        else:
+            # Small penalty for repeating same action too much
+            self.consecutive_same_actions += 1
+            if self.consecutive_same_actions > 3:
+                return -0.1 * (self.consecutive_same_actions - 3)
+        
+        return 0.0
+    
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        # Store pre-action state
+        prev_boxes_on_targets = self.boxes_on_targets()
+        prev_player_pos = self._get_player_position()
+        
+        # Execute action
+        action_map = {0: soko.UP, 1: soko.DOWN, 2: soko.LEFT, 3: soko.RIGHT}
+        obs_data, base_reward, done, pushed_box = self.game.step(action_map[action])
+        
+        # Update tracking
+        self.step_count += 1
+        current_boxes_on_targets = self.boxes_on_targets()
+        current_player_pos = self._get_player_position()
+        
+        # ==================== ENHANCED REWARD CALCULATION ====================
+        reward_components = {}
+        reward = 0.0
+        
+        # 1. BASE STEP REWARD (small penalty to encourage efficiency)
+        step_penalty = -0.015
+        reward += step_penalty
+        reward_components['step_penalty'] = step_penalty
+        
+        # 2. ACTION DIVERSITY BONUS (break repetitive patterns)
+        diversity_bonus = self._calculate_action_diversity_bonus(action)
+        if diversity_bonus != 0:
+            reward += diversity_bonus
+            reward_components['diversity'] = diversity_bonus
+        
+        # Update action tracking
+        self.last_actions.append(action)
+        if self.last_action == action:
+            self.consecutive_same_actions += 1
+        else:
+            self.consecutive_same_actions = 1
+        self.last_action = action
+        
+        # 3. TARGET PROGRESS (primary learning signal)
+        target_progress = current_boxes_on_targets - prev_boxes_on_targets
+        if target_progress > 0:
+            progress_bonus = target_progress * 30.0  # Large bonus for progress
+            reward += progress_bonus
+            reward_components['target_progress'] = progress_bonus
+            print(f"🎯 BOX ON TARGET! +{progress_bonus:.1f}")
+        elif target_progress < 0:
+            regression_penalty = target_progress * 5.0  # Reduced penalty
+            reward += regression_penalty
+            reward_components['target_regression'] = regression_penalty
+        
+        # 4. MILESTONE REWARDS (for incremental progress)
+        if current_boxes_on_targets > self.best_boxes_on_targets:
+            old_best = self.best_boxes_on_targets
+            self.best_boxes_on_targets = current_boxes_on_targets
+            milestone_bonus = 20.0 * (current_boxes_on_targets - old_best)
+            reward += milestone_bonus
+            reward_components['milestone'] = milestone_bonus
+            print(f"🏆 NEW BEST: {current_boxes_on_targets} boxes! +{milestone_bonus:.1f}")
+        
+        # 5. EXPLORATION BONUS (encourage visiting new positions)
+        pos_key = f"{current_player_pos[0]},{current_player_pos[1]}"
+        if pos_key not in self.exploration_bonus_used:
+            self.exploration_bonus_used.add(pos_key)
+            if len(self.exploration_bonus_used) <= 25:  # Limit to prevent exploitation
+                exploration_bonus = 0.3
+                reward += exploration_bonus
+                reward_components['exploration'] = exploration_bonus
+        
+        # 6. BOX INTERACTION REWARD (encourage pushing)
+        if pushed_box:
+            interaction_bonus = 2.5
+            reward += interaction_bonus
+            reward_components['box_interaction'] = interaction_bonus
+        
+        # 7. BOX PROXIMITY BONUS (encourage approaching boxes)
+        proximity_bonus = self._calculate_box_proximity_bonus(current_player_pos)
+        reward += proximity_bonus
+        reward_components['proximity'] = proximity_bonus
+        
+        # 8. COMPLETION BONUS (large reward for solving)
+        if done and self.game.is_solved():
+            efficiency_bonus = max(0, 300 - self.step_count) * 1.5
+            completion_bonus = 350.0 + efficiency_bonus
+            reward += completion_bonus
+            reward_components['completion'] = completion_bonus
+            self.solved_step = self.step_count
+            print(f"🎉 LEVEL SOLVED! +{completion_bonus:.1f} (Steps: {self.step_count})")
+        
+        # 9. TIMEOUT MANAGEMENT (intelligent penalty)
+        if self.step_count >= 200:
+            done = True
+            if not self.game.is_solved():
+                # Scale penalty based on progress made
+                if self.best_boxes_on_targets > 0:
+                    timeout_penalty = -3.0 * (4 - self.best_boxes_on_targets)
+                else:
+                    timeout_penalty = -12.0
+                reward += timeout_penalty
+                reward_components['timeout'] = timeout_penalty
+        
+        self.total_reward += reward
+        
+        # Get observation and info
+        obs = self._get_observation()
+        info = self._get_info(reward_components)
+        info['best_boxes_on_targets'] = self.best_boxes_on_targets
+        info['action_diversity'] = len(set(self.last_actions)) / max(1, len(self.last_actions))
+        
+        return obs, reward, done, False, info
     
     def reset(self, seed=None, options=None):
-        """Reset with improved tracking"""
+        """Reset environment with enhanced tracking"""
         result = super().reset(seed, options)
         self.best_boxes_on_targets = 0
         self.exploration_bonus_used = set()
+        self.last_actions.clear()
+        self.consecutive_same_actions = 0
+        self.last_action = None
         return result
 
-class ImprovedPPOTrainer:
+# =============================================================================
+# ADVANCED CURRICULUM MANAGER
+# =============================================================================
+
+class AdvancedCurriculumManager:
     """
-    IMPROVED PPO trainer with better hyperparameters for Sokoban learning.
+    Intelligent curriculum learning with multiple progression criteria.
+    """
+    
+    def __init__(self, success_threshold=0.15, evaluation_window=100):
+        self.success_threshold = success_threshold
+        self.evaluation_window = evaluation_window
+        self.current_difficulty = 1
+        self.success_history = deque(maxlen=evaluation_window)
+        self.reward_history = deque(maxlen=evaluation_window)
+        self.boxes_history = deque(maxlen=evaluation_window)
+        self.episodes_at_current_level = 0
+        self.min_episodes_per_level = 400
+        
+        print("📈 ADVANCED CURRICULUM MANAGER INITIALIZED")
+        print(f"   Starting at level {self.current_difficulty}")
+        print(f"   Success threshold: {success_threshold:.1%}")
+    
+    def update(self, success: bool, episode_reward: float, boxes_on_targets: int) -> bool:
+        """Update curriculum based on multiple performance metrics"""
+        self.success_history.append(success)
+        self.reward_history.append(episode_reward)
+        self.boxes_history.append(boxes_on_targets)
+        self.episodes_at_current_level += 1
+        
+        # Only evaluate after minimum episodes and full window
+        if (len(self.success_history) >= self.evaluation_window and 
+            self.episodes_at_current_level >= self.min_episodes_per_level):
+            
+            success_rate = np.mean(self.success_history)
+            avg_reward = np.mean(self.reward_history)
+            avg_boxes = np.mean(self.boxes_history)
+            
+            upgrade_ready = False
+            
+            # Multiple upgrade criteria
+            if success_rate >= self.success_threshold:
+                upgrade_ready = True
+                reason = f"success rate ({success_rate:.1%})"
+            elif avg_boxes >= 1.5 and avg_reward > -2.0:
+                upgrade_ready = True
+                reason = f"box progress ({avg_boxes:.1f} boxes)"
+            elif avg_reward > 5.0:  # Very good performance
+                upgrade_ready = True
+                reason = f"high reward ({avg_reward:.1f})"
+            
+            # Upgrade if ready
+            if upgrade_ready and self.current_difficulty < 3:
+                old_level = self.current_difficulty
+                self.current_difficulty += 1
+                self._reset_tracking()
+                print(f"\n🚀 CURRICULUM UPGRADE: Level {old_level} → {self.current_difficulty}")
+                print(f"   Reason: {reason}")
+                return True
+            
+            # Downgrade if struggling
+            elif (success_rate < 0.02 and avg_reward < -18.0 and 
+                  self.current_difficulty > 1 and self.episodes_at_current_level > 1000):
+                old_level = self.current_difficulty
+                self.current_difficulty -= 1
+                self._reset_tracking()
+                print(f"\n📉 CURRICULUM DOWNGRADE: Level {old_level} → {self.current_difficulty}")
+                print(f"   Reason: poor performance (success: {success_rate:.1%}, reward: {avg_reward:.1f})")
+                return True
+        
+        return False
+    
+    def _reset_tracking(self):
+        """Reset tracking variables"""
+        self.episodes_at_current_level = 0
+        self.success_history.clear()
+        self.reward_history.clear()
+        self.boxes_history.clear()
+
+# =============================================================================
+# COMPLETE PPO TRAINER
+# =============================================================================
+
+class CompletePPOTrainer:
+    """
+    Complete PPO training system with all enhancements.
     """
     
     def __init__(self, args):
+        if not ENV_AVAILABLE:
+            raise ImportError("Cannot create environments - dependencies missing")
+            
         self.args = args
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"🖥️ Using device: {self.device}")
+        print(f"🖥️  Using device: {self.device}")
         
-        # Create IMPROVED environments
-        self.envs = [ImprovedSokobanEnv() for _ in range(args.num_envs)]
+        # Create enhanced environments
+        self.envs = [EnhancedSokobanEnv() for _ in range(args.num_envs)]
         
-        # IMPROVED network
+        # Initialize components
         obs_shape = self.envs[0].observation_space.shape
         num_actions = self.envs[0].action_space.n
         
-        print(f"\n🔧 IMPROVED NETWORK SETUP:")
-        print(f"📐 Observation shape: {obs_shape}")
-        print(f"🎮 Number of actions: {num_actions}")
-        
-        self.network = ImprovedEfficientPPONetwork(obs_shape, num_actions).to(self.device)
-        
-        # IMPROVED optimizer with better learning rate scheduling
+        self.network = AdvancedSokobanNetwork(obs_shape, num_actions).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=args.learning_rate, eps=1e-5)
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=500, gamma=0.95)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=400, gamma=0.96)
         
-        # IMPROVED PPO hyperparameters
+        # Enhanced components
+        self.exploration_manager = EnhancedExplorationManager()
+        self.curriculum = AdvancedCurriculumManager()
+        
+        # PPO parameters
         self.gamma = 0.99
         self.gae_lambda = 0.95
         self.clip_range = 0.2
-        self.entropy_coef = 0.02  # INCREASED: More exploration
+        self.entropy_coef = 0.025
         self.value_coef = 0.5
         self.max_grad_norm = 0.5
         
-        # IMPROVED curriculum
-        self.curriculum = ImprovedCurriculumManager()
-        
-        # Enhanced tracking
+        # Comprehensive tracking
         self.episode_rewards = deque(maxlen=1000)
         self.episode_lengths = deque(maxlen=1000)
         self.success_rates = deque(maxlen=1000)
         self.boxes_on_targets = deque(maxlen=1000)
-        self.best_boxes_achieved = deque(maxlen=1000)  # Track learning progress
+        self.best_boxes_achieved = deque(maxlen=1000)
+        self.action_diversities = deque(maxlen=1000)
         
-        print(f"\n⚡ IMPROVED TRAINER READY!")
-        print(f"🎯 Better reward shaping")
-        print(f"🧠 Improved network architecture") 
-        print(f"📈 Enhanced curriculum learning")
-        print(f"🔍 Better progress tracking")
+        print(f"\n⚡ COMPLETE PPO TRAINER INITIALIZED!")
+        print(f"🎯 Environments: {args.num_envs}")
+        print(f"📚 Learning rate: {args.learning_rate}")
+        print(f"🎲 Entropy coefficient: {self.entropy_coef}")
+        print("=" * 60)
     
     def collect_rollouts(self):
-        """Collect rollouts with improved tracking."""
+        """Collect rollouts with enhanced exploration"""
         observations = []
         actions = []
         rewards = []
@@ -329,7 +515,7 @@ class ImprovedPPOTrainer:
         values = []
         log_probs = []
         
-        # Reset environments if needed
+        # Initialize environments
         obs_list = []
         for env in self.envs:
             if not hasattr(env, '_current_obs'):
@@ -337,47 +523,62 @@ class ImprovedPPOTrainer:
                 env._current_obs = obs
             obs_list.append(env._current_obs)
         
-        # Collect steps
+        # Get current exploration rate
+        epsilon = self.exploration_manager.get_epsilon()
+        
+        # Collect experience
         for step in range(self.args.num_steps):
-            # Convert observations to tensor
             obs_tensor = torch.FloatTensor(obs_list).to(self.device)
             
-            # Get action distribution and value
             with torch.no_grad():
                 logits, value = self.network(obs_tensor)
-                dist = torch.distributions.Categorical(logits=logits)
-                action = dist.sample()
-                log_prob = dist.log_prob(action)
+                
+                # Enhanced exploration: epsilon-greedy + policy sampling
+                if np.random.random() < epsilon:
+                    # Random exploration
+                    action = torch.randint(0, self.envs[0].action_space.n, (len(self.envs),))
+                    log_prob = torch.zeros(len(self.envs))
+                else:
+                    # Policy-based action
+                    dist = torch.distributions.Categorical(logits=logits)
+                    action = dist.sample()
+                    log_prob = dist.log_prob(action)
+                
+                # Record actions for diversity tracking
+                for a in action.cpu().numpy():
+                    self.exploration_manager.record_action(a)
             
-            # Store step data
+            # Store data
             observations.append(obs_tensor.cpu())
             actions.append(action.cpu())
             values.append(value.cpu())
             log_probs.append(log_prob.cpu())
             
-            # Execute actions in environments
+            # Execute actions
             next_obs_list = []
             step_rewards = []
             step_dones = []
             
             for i, env in enumerate(self.envs):
-                obs, reward, done, truncated, info = env.step(action[i].item())
+                obs, reward, terminated, truncated, info = env.step(action[i].item())
                 
                 step_rewards.append(reward)
-                step_dones.append(done or truncated)
+                step_dones.append(terminated or truncated)
                 
-                if done or truncated:
-                    # Track episode statistics with IMPROVED metrics
+                if terminated or truncated:
+                    # Track comprehensive metrics
                     self.episode_rewards.append(info.get('total_reward', reward))
                     self.episode_lengths.append(info.get('step_count', 1))
                     self.success_rates.append(1.0 if info.get('is_solved', False) else 0.0)
                     self.boxes_on_targets.append(info.get('boxes_on_targets', 0))
                     self.best_boxes_achieved.append(info.get('best_boxes_on_targets', 0))
+                    self.action_diversities.append(info.get('action_diversity', 0.0))
                     
-                    # Update IMPROVED curriculum
+                    # Update curriculum
                     episode_reward = info.get('total_reward', reward)
                     success = info.get('is_solved', False)
-                    self.curriculum.update(success, episode_reward)
+                    boxes = info.get('boxes_on_targets', 0)
+                    self.curriculum.update(success, episode_reward, boxes)
                     
                     # Reset environment
                     obs, _ = env.reset()
@@ -389,7 +590,10 @@ class ImprovedPPOTrainer:
             dones.append(step_dones)
             obs_list = next_obs_list
         
-        # Get final values for GAE
+        # Update exploration
+        self.exploration_manager.step()
+        
+        # Final values for GAE
         with torch.no_grad():
             final_obs_tensor = torch.FloatTensor(obs_list).to(self.device)
             _, final_values = self.network(final_obs_tensor)
@@ -406,7 +610,7 @@ class ImprovedPPOTrainer:
         }
     
     def compute_gae(self, rollouts):
-        """Compute Generalized Advantage Estimation."""
+        """Compute Generalized Advantage Estimation"""
         rewards = rollouts['rewards']
         values = rollouts['values']
         dones = rollouts['dones']
@@ -419,22 +623,21 @@ class ImprovedPPOTrainer:
         gae = 0
         for step in reversed(range(num_steps)):
             if step == num_steps - 1:
-                print(dones[step])
-                nextnonterminal = ~dones[step]
-                nextvalues = final_values
+                next_nonterminal = 1.0 - dones[step].float()
+                next_values = final_values
             else:
-                nextnonterminal = ~dones[step]
-                nextvalues = values[step + 1]
+                next_nonterminal = 1.0 - dones[step].float()
+                next_values = values[step + 1]
             
-            delta = rewards[step] + self.gamma * nextvalues * nextnonterminal - values[step]
-            gae = delta + self.gamma * self.gae_lambda * nextnonterminal * gae
+            delta = rewards[step] + self.gamma * next_values * next_nonterminal - values[step]
+            gae = delta + self.gamma * self.gae_lambda * next_nonterminal * gae
             advantages[step] = gae
-            returns[step] = gae + values[step]
         
+        returns = advantages + values
         return advantages, returns
     
     def update_policy(self, rollouts, advantages, returns):
-        """Update policy using IMPROVED PPO."""
+        """Update policy with enhanced PPO"""
         observations = rollouts['observations'].view(-1, *rollouts['observations'].shape[2:])
         actions = rollouts['actions'].view(-1)
         old_log_probs = rollouts['log_probs'].view(-1)
@@ -444,8 +647,12 @@ class ImprovedPPOTrainer:
         # Normalize advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
-        # IMPROVED PPO update with more epochs for better learning
-        for epoch in range(4):  # PPO epochs
+        # Multiple PPO epochs for better learning
+        policy_losses = []
+        value_losses = []
+        entropy_losses = []
+        
+        for epoch in range(4):
             # Forward pass
             logits, values = self.network(observations.to(self.device))
             
@@ -461,45 +668,54 @@ class ImprovedPPOTrainer:
             # Value loss
             value_loss = nn.functional.mse_loss(values.squeeze(), returns.to(self.device))
             
-            # Entropy loss (IMPROVED: higher coefficient for more exploration)
+            # Entropy loss
             entropy_loss = -dist.entropy().mean()
             
             # Total loss
             loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
             
-            # Optimize
+            # Optimization step
             self.optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self.max_grad_norm)
             self.optimizer.step()
+            
+            # Track losses
+            policy_losses.append(policy_loss.item())
+            value_losses.append(value_loss.item())
+            entropy_losses.append(entropy_loss.item())
         
         # Update learning rate
         self.scheduler.step()
         
         return {
-            'policy_loss': policy_loss.item(),
-            'value_loss': value_loss.item(),
-            'entropy_loss': entropy_loss.item(),
+            'policy_loss': np.mean(policy_losses),
+            'value_loss': np.mean(value_losses),
+            'entropy_loss': np.mean(entropy_losses),
             'learning_rate': self.scheduler.get_last_lr()[0]
         }
     
     def train(self):
-        """Main IMPROVED training loop."""
+        """Complete training loop"""
         total_timesteps = self.args.total_timesteps
         num_updates = total_timesteps // (self.args.num_envs * self.args.num_steps)
         global_step = 0
         
-        print(f"\n🚀 STARTING IMPROVED PPO TRAINING")
+        print(f"\n🚀 STARTING COMPLETE PPO TRAINING")
         print(f"📊 Total timesteps: {total_timesteps:,}")
         print(f"🔄 Number of updates: {num_updates:,}")
         print(f"🌍 Environments: {self.args.num_envs}")
         print(f"👟 Steps per rollout: {self.args.num_steps}")
-        print("="*80)
+        print("=" * 80)
         
         start_time = time.time()
         
         for update in range(1, num_updates + 1):
-            # Collect rollouts
+            # Set curriculum difficulty
+            for env in self.envs:
+                env.set_difficulty(self.curriculum.current_difficulty)
+            
+            # Collect experience
             rollouts = self.collect_rollouts()
             global_step += self.args.num_envs * self.args.num_steps
             
@@ -509,87 +725,113 @@ class ImprovedPPOTrainer:
             # Update policy
             loss_info = self.update_policy(rollouts, advantages, returns)
             
-            # Update curriculum difficulty for all environments
-            for env in self.envs:
-                env.set_difficulty(self.curriculum.current_difficulty)
-            
-            # IMPROVED logging with more useful metrics
+            # Enhanced logging
             if update % 10 == 0:
                 elapsed_time = time.time() - start_time
                 steps_per_sec = global_step / elapsed_time
                 
+                # Calculate metrics
+                metrics = {}
+                if len(self.episode_rewards) > 0:
+                    recent_idx = slice(-min(50, len(self.episode_rewards)), None)
+                    metrics.update({
+                        'avg_reward': np.mean(list(self.episode_rewards)[recent_idx]),
+                        'avg_length': np.mean(list(self.episode_lengths)[recent_idx]),
+                        'success_rate': np.mean(list(self.success_rates)[recent_idx]),
+                        'avg_boxes': np.mean(list(self.boxes_on_targets)[recent_idx]),
+                        'avg_best_boxes': np.mean(list(self.best_boxes_achieved)[recent_idx]),
+                        'action_diversity': np.mean(list(self.action_diversities)[recent_idx]),
+                        'exploration_epsilon': self.exploration_manager.get_epsilon()
+                    })
+                
+                # Print comprehensive update
                 print(f"\n📈 UPDATE {update:,} | STEP {global_step:,}")
-                print(f"⏱️ Time: {elapsed_time:.1f}s | Speed: {steps_per_sec:.0f} steps/s")
-                print(f"🎯 Curriculum Level: {self.curriculum.current_difficulty}")
+                print(f"⏱️  Time: {elapsed_time:.1f}s | Speed: {steps_per_sec:.0f} steps/s")
+                print(f"🎯 Curriculum: Level {self.curriculum.current_difficulty}")
                 print(f"📚 Learning Rate: {loss_info['learning_rate']:.6f}")
                 print(f"📉 Policy Loss: {loss_info['policy_loss']:.4f}")
                 print(f"📊 Value Loss: {loss_info['value_loss']:.4f}")
-                print(f"🎲 Entropy Loss: {loss_info['entropy_loss']:.4f}")
+                print(f"🎲 Entropy: {loss_info['entropy_loss']:.4f}")
                 
-                if len(self.episode_rewards) > 0:
-                    avg_reward = np.mean(list(self.episode_rewards)[-50:])
-                    avg_length = np.mean(list(self.episode_lengths)[-50:])
-                    success_rate = np.mean(list(self.success_rates)[-50:])
-                    avg_boxes = np.mean(list(self.boxes_on_targets)[-50:])
-                    avg_best_boxes = np.mean(list(self.best_boxes_achieved)[-50:])
-                    
-                    print(f"💰 Avg Reward (last 50): {avg_reward:.3f}")
-                    print(f"📏 Avg Length (last 50): {avg_length:.1f}")
-                    print(f"🏆 Success Rate (last 50): {success_rate:.1%}")
-                    print(f"📦 Avg Boxes on Targets: {avg_boxes:.2f}")
-                    print(f"🎯 Avg Best Boxes Achieved: {avg_best_boxes:.2f}")  # NEW METRIC
+                if metrics:
+                    print(f"💰 Avg Reward: {metrics['avg_reward']:.3f}")
+                    print(f"📏 Avg Length: {metrics['avg_length']:.1f}")
+                    print(f"🏆 Success Rate: {metrics['success_rate']:.1%}")
+                    print(f"📦 Avg Boxes: {metrics['avg_boxes']:.2f}")
+                    print(f"🎯 Avg Best Boxes: {metrics['avg_best_boxes']:.2f}")
+                    print(f"🔄 Action Diversity: {metrics['action_diversity']:.1%}")
+                    print(f"🔍 Exploration ε: {metrics['exploration_epsilon']:.3f}")
                 
-                print(f"{'~'*60}")
+                print("~" * 60)
             
             # Save model periodically
             if update % 100 == 0 and update > 0:
-                torch.save({
+                checkpoint = {
                     'network_state_dict': self.network.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
                     'scheduler_state_dict': self.scheduler.state_dict(),
                     'global_step': global_step,
                     'curriculum_level': self.curriculum.current_difficulty,
                     'obs_shape': self.envs[0].observation_space.shape,
-                    'num_actions': self.envs[0].action_space.n
-                }, f'improved_sokoban_model_{global_step}.pt')
-                print(f"💾 IMPROVED Model saved at step {global_step:,}")
+                    'num_actions': self.envs[0].action_space.n,
+                    'training_args': vars(self.args)
+                }
+                
+                filename = f'complete_sokoban_model_{global_step}.pt'
+                torch.save(checkpoint, filename)
+                print(f"💾 Model saved: {filename}")
         
         # Final summary
-        print("\n" + "="*80)
-        print("🎉 IMPROVED TRAINING COMPLETE")
+        print("\n" + "=" * 80)
+        print("🎉 TRAINING COMPLETE!")
+        print("=" * 80)
+        
         if len(self.success_rates) > 0:
-            final_success_rate = np.mean(list(self.success_rates)[-100:])
-            final_avg_reward = np.mean(list(self.episode_rewards)[-100:])
-            final_avg_boxes = np.mean(list(self.boxes_on_targets)[-100:])
-            final_best_boxes = np.mean(list(self.best_boxes_achieved)[-100:])
+            final_metrics = {
+                'success_rate': np.mean(list(self.success_rates)[-100:]),
+                'avg_reward': np.mean(list(self.episode_rewards)[-100:]),
+                'avg_boxes': np.mean(list(self.boxes_on_targets)[-100:]),
+                'final_level': self.curriculum.current_difficulty,
+                'total_episodes': len(self.success_rates)
+            }
             
-            print(f"📊 Total Episodes: {len(self.success_rates):,}")
-            print(f"🏆 Final Success Rate (last 100): {final_success_rate:.1%}")
-            print(f"💰 Final Avg Reward (last 100): {final_avg_reward:.3f}")
-            print(f"📦 Final Avg Boxes on Targets: {final_avg_boxes:.2f}")
-            print(f"🎯 Final Avg Best Boxes: {final_best_boxes:.2f}")
-            print(f"🎯 Final Curriculum Level: {self.curriculum.current_difficulty}")
-        print("="*80)
+            print(f"📊 Total Episodes: {final_metrics['total_episodes']:,}")
+            print(f"🏆 Final Success Rate: {final_metrics['success_rate']:.1%}")
+            print(f"💰 Final Avg Reward: {final_metrics['avg_reward']:.3f}")
+            print(f"📦 Final Avg Boxes: {final_metrics['avg_boxes']:.2f}")
+            print(f"🎯 Final Curriculum Level: {final_metrics['final_level']}")
+        
+        print("=" * 80)
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='IMPROVED Efficient Sokoban PPO Training')
+    parser = argparse.ArgumentParser(description='Complete Sokoban PPO Training')
     parser.add_argument('--num-envs', type=int, default=8, help='Number of parallel environments')
     parser.add_argument('--num-steps', type=int, default=256, help='Steps per rollout')
     parser.add_argument('--total-timesteps', type=int, default=2000000, help='Total training timesteps')
-    parser.add_argument('--learning-rate', type=float, default=2e-4, help='Learning rate (IMPROVED: lower for stability)')
+    parser.add_argument('--learning-rate', type=float, default=2e-4, help='Learning rate')
     
     args = parser.parse_args()
     
-    print("🚀 IMPROVED EFFICIENT SOKOBAN PPO TRAINER")
-    print("="*50)
-    print("✅ BETTER REWARD SHAPING for faster learning")
-    print("🧠 IMPROVED NETWORK ARCHITECTURE for spatial reasoning")
-    print("📈 ENHANCED CURRICULUM LEARNING")
-    print("🔍 BETTER PROGRESS TRACKING")
-    print("="*50)
+    print("🚀 COMPLETE SOKOBAN PPO TRAINING SYSTEM")
+    print("=" * 50)
+    print("✅ ENHANCED EXPLORATION with epsilon-greedy")
+    print("🧠 ADVANCED NETWORK with residual connections") 
+    print("🎯 SUPERIOR REWARD SHAPING with diversity bonuses")
+    print("📈 INTELLIGENT CURRICULUM LEARNING")
+    print("📊 COMPREHENSIVE PROGRESS TRACKING")
+    print("=" * 50)
     
-    trainer = ImprovedPPOTrainer(args)
-    trainer.train()
+    try:
+        trainer = CompletePPOTrainer(args)
+        trainer.train()
+    except Exception as e:
+        print(f"❌ Training failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == '__main__':
     main()

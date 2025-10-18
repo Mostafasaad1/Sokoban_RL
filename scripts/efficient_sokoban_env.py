@@ -274,8 +274,11 @@ class EfficientSokobanEnv(gym.Env):
     
     def set_difficulty(self, level: int):
         """Set curriculum difficulty level"""
+        temp = self.difficulty_level
         self.difficulty_level = min(3, max(1, level))
-        print(f"🎯 Difficulty set to level {self.difficulty_level}")
+        changed_Difficulty = (temp != self.difficulty_level)
+        if changed_Difficulty:
+            print(f"🎯 Difficulty set to level {self.difficulty_level}")
     
     def get_success_rate(self) -> float:
         """Get current success rate (for curriculum progression)"""
