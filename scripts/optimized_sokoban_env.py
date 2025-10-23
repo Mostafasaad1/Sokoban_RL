@@ -2,59 +2,72 @@ import numpy as np
 import gymnasium as gym
 from typing import Tuple, Dict, Any, Optional
 import sokoban_engine as soko
+from sokoban_levels import SokobanLevelCollection
+import random
 
 global action_tracker
 action_tracker = []
 
 class OptimizedSokobanEnv(gym.Env):
     """
-    FIXED: Balanced reward shaping and proper curriculum learning.
+    Multi-level Sokoban environment with random level selection.
     
-    Key fixes:
-    - Symmetric rewards/penalties (±1.0 for box placement/removal)
-    - Meaningful distance-based shaping (0.1 magnitude)
-    - Higher step penalty for urgency (-0.01 instead of -0.002)
-    - Gentler anti-hacking (0.5 strength instead of 2.0)
-    - Shorter episodes (200 steps instead of 400)
+    Features:
+    - 40+ levels of varying difficulty
+    - Random level selection every episode
+    - Curriculum-based level filtering
+    - Balanced reward shaping
     """
     
     def __init__(self, 
-                 max_episode_steps: int = 200,  # FIXED: Was 400
-                 curriculum_mode: bool = True,   # FIXED: Was False
+                 max_episode_steps: int = 200,
+                 curriculum_mode: bool = True,
                  difficulty_level: int = 1,
-                 anti_hacking_strength: float = 0.5):  # FIXED: Was 2.0
+                 anti_hacking_strength: float = 0.5,
+                 level_selection_mode: str = 'random',  # 'random', 'sequential', 'curriculum'
+                 custom_levels: Optional[list] = None):
         
         super().__init__()
         global action_tracker
         
         # Constants from sokoban engine
-        self.WALL = soko.WALL  # 0
-        self.EMPTY = soko.EMPTY  # 1
-        self.PLAYER = soko.PLAYER  # 2
-        self.BOX = soko.BOX  # 3
-        self.TARGET = soko.TARGET  # 4
-        self.BOX_ON_TARGET = soko.BOX_ON_TARGET  # 5
-        self.PLAYER_ON_TARGET = soko.PLAYER_ON_TARGET  # 6
+        self.WALL = soko.WALL
+        self.EMPTY = soko.EMPTY
+        self.PLAYER = soko.PLAYER
+        self.BOX = soko.BOX
+        self.TARGET = soko.TARGET
+        self.BOX_ON_TARGET = soko.BOX_ON_TARGET
+        self.PLAYER_ON_TARGET = soko.PLAYER_ON_TARGET
         
         self.max_episode_steps = max_episode_steps
         self.curriculum_mode = curriculum_mode
         self.difficulty_level = difficulty_level
         self.anti_hacking_strength = anti_hacking_strength
+        self.level_selection_mode = level_selection_mode
+        
+        # Level management
+        self.level_collection = SokobanLevelCollection()
+        self.custom_levels = custom_levels
+        self.current_level_index = 0
+        self.current_level_string = None
+        
+        # Statistics for each level
+        self.level_stats = {}  # {level_index: {'attempts': 0, 'solves': 0}}
         
         # Game engine
         self.game = soko.Sokoban()
         
-        # Episode counter for curriculum
+        # Episode counter
         self.episode_count = 0
         
         # State tracking for advanced rewards
         self.reset_tracking_vars()
         
-        # Observation and action spaces
+        # Observation and action spaces (use maximum possible size)
         self.observation_space = gym.spaces.Box(
-            low=0, high=6, shape=(100,), dtype=np.int32
+            low=0, high=6, shape=(200,), dtype=np.int32  # Increased for larger levels
         )
-        self.action_space = gym.spaces.Discrete(4)  # up, down, left, right
+        self.action_space = gym.spaces.Discrete(4)
         
     def reset_tracking_vars(self):
         """Reset all tracking variables for reward computation"""
@@ -68,8 +81,76 @@ class OptimizedSokobanEnv(gym.Env):
         self.last_box_positions = set()
         self.box_oscillation_penalty = 0
         self.solved_step = None
-        self.last_distance = None  # Track distance changes
+        self.last_distance = None
+    
+    def get_available_levels(self) -> list:
+        """Get list of levels based on current mode and difficulty"""
+        if self.custom_levels:
+            return self.custom_levels
         
+        if self.level_selection_mode == 'curriculum' and self.curriculum_mode:
+            return self.level_collection.get_curriculum_levels(self.difficulty_level)
+        else:
+            return self.level_collection.get_all_levels()
+    
+    def select_next_level(self):
+        """Select the next level based on selection mode"""
+        available_levels = self.get_available_levels()
+        
+        if self.level_selection_mode == 'random':
+            # Random selection
+            self.current_level_index = random.randint(0, len(available_levels) - 1)
+        elif self.level_selection_mode == 'sequential':
+            # Sequential with wraparound
+            self.current_level_index = (self.current_level_index + 1) % len(available_levels)
+        elif self.level_selection_mode == 'curriculum':
+            # Weighted random based on performance
+            self.current_level_index = self._select_curriculum_level(available_levels)
+        else:
+            self.current_level_index = 0
+        
+        self.current_level_string = available_levels[self.current_level_index]
+        return self.current_level_string
+    
+    def _select_curriculum_level(self, available_levels):
+        """Select level with curriculum strategy (focus on unsolved)"""
+        # Build weights based on solve rate
+        weights = []
+        for i in range(len(available_levels)):
+            stats = self.level_stats.get(i, {'attempts': 0, 'solves': 0})
+            attempts = stats['attempts']
+            solves = stats['solves']
+            
+            if attempts == 0:
+                # Unseen level - high priority
+                weight = 2.0
+            else:
+                solve_rate = solves / attempts
+                # Lower solve rate = higher weight (focus on difficult levels)
+                weight = max(0.1, 1.0 - solve_rate)
+            
+            weights.append(weight)
+        
+        # Normalize weights
+        total_weight = sum(weights)
+        if total_weight > 0:
+            weights = [w / total_weight for w in weights]
+        else:
+            weights = [1.0 / len(weights)] * len(weights)
+        
+        # Weighted random choice
+        return np.random.choice(len(available_levels), p=weights)
+    
+    def set_specific_level(self, level_index_or_string):
+        """Set a specific level by index or string"""
+        if isinstance(level_index_or_string, str):
+            self.current_level_string = level_index_or_string
+            self.current_level_index = -1  # Custom level
+        else:
+            available_levels = self.get_available_levels()
+            self.current_level_index = level_index_or_string % len(available_levels)
+            self.current_level_string = available_levels[self.current_level_index]
+    
     def boxes_on_targets(self) -> int:
         """Count boxes currently on target positions"""
         grid = self.game.get_grid()
@@ -146,8 +227,9 @@ class OptimizedSokobanEnv(gym.Env):
         # Increment episode counter
         self.episode_count += 1
         
-        # Use the default built-in level
-        self.game.reset()
+        # Select and load new level
+        level_string = self.select_next_level()
+        self.game.load_level(level_string)
         
         # Initialize distance tracking
         self.last_distance = self.total_box_target_distance()
@@ -155,6 +237,8 @@ class OptimizedSokobanEnv(gym.Env):
         # Get initial observation
         obs = self._get_observation()
         info = self._get_info()
+        info['level_index'] = self.current_level_index
+        info['level_string'] = self.current_level_string
         
         return obs, info
     
@@ -185,11 +269,10 @@ class OptimizedSokobanEnv(gym.Env):
         current_distance = self.total_box_target_distance()
         self.last_distance = current_distance
         
-        # Track box movement patterns for anti-hacking
+        # Track box movement patterns
         if pushed_box:
             self.push_count += 1
             
-            # Detect useless pushes (box returns to previous position)
             if current_box_positions == self.last_box_positions:
                 self.useless_push_count += 1
                 self.box_oscillation_penalty += 0.1 * self.anti_hacking_strength
@@ -201,42 +284,44 @@ class OptimizedSokobanEnv(gym.Env):
         if len(self.boxes_on_targets_history) > 10:
             self.boxes_on_targets_history.pop(0)
             
-        # Calculate stability bonus (boxes staying on targets)
         if len(self.boxes_on_targets_history) >= 5:
             recent_avg = np.mean(self.boxes_on_targets_history[-5:])
             if recent_avg > 0.8 * self.num_targets():
                 self.target_stability_bonus += 0.02
         
-        # Compute advanced reward with FIXED balancing
+        # Compute reward
         reward_components = self._compute_advanced_reward(
             base_reward, prev_boxes_on_targets, current_boxes_on_targets, 
             pushed_box, done, prev_distance, current_distance
         )
         total_reward = sum(reward_components.values())
         
-        # Check termination conditions
+        # Check termination
         truncated = self.step_count >= self.max_episode_steps
         if done and self.solved_step is None:
             self.solved_step = self.step_count
         
-        # Get new observation and info
+        # Update level statistics
+        if done or truncated:
+            if self.current_level_index >= 0:
+                if self.current_level_index not in self.level_stats:
+                    self.level_stats[self.current_level_index] = {'attempts': 0, 'solves': 0}
+                
+                self.level_stats[self.current_level_index]['attempts'] += 1
+                if done:
+                    self.level_stats[self.current_level_index]['solves'] += 1
+        
+        # Get observation and info
         obs = self._get_observation()
         info = self._get_info(reward_components)
+        info['level_index'] = self.current_level_index
         
         return obs, total_reward, done, truncated, info, action_tracker
     
     def _compute_advanced_reward(self, base_reward: float, prev_targets: int, 
                                 curr_targets: int, pushed_box: bool, solved: bool,
                                 prev_distance: float, curr_distance: float) -> Dict[str, float]:
-        """
-        FIXED: Balanced reward structure with proper magnitudes
-        
-        Changes:
-        - Progress rewards are now ±1.0 (was +0.5/-2.0)
-        - Distance shaping is 0.1 magnitude (was 0.005)
-        - Step penalty is -0.01 (was -0.002)
-        - Anti-hacking is gentler (strength 0.5 vs 2.0)
-        """
+        """Balanced reward structure"""
         components = {
             'base': base_reward,
             'progress': 0.0,
@@ -244,52 +329,43 @@ class OptimizedSokobanEnv(gym.Env):
             'stability': 0.0,
             'efficiency': 0.0,
             'anti_hack': 0.0,
-            'step': -0.01  # FIXED: Was -0.002 (5x increase)
+            'step': -0.01
         }
         
-        # 1. PROGRESS REWARDS - FIXED: Now symmetric!
+        # Progress rewards
         target_change = curr_targets - prev_targets
         if target_change > 0:
-            # Box placed on target - BIG reward
-            components['progress'] = 1.0 * target_change  # FIXED: Was 0.5
-            print(f"📦✅ Box(es) placed on target! Progress reward: {components['progress']:.3f}")
+            components['progress'] = 1.0 * target_change
         elif target_change < 0:
-            # Box removed from target - EQUAL penalty
-            components['progress'] = -1.0 * abs(target_change)  # FIXED: Was -2.0 to -4.0
-            print(f"📦❌ Box(es) removed from target! Penalty: {components['progress']:.3f}")
+            components['progress'] = -1.0 * abs(target_change)
         
-        # 2. STABILITY BONUS (keeping boxes on targets)
+        # Stability bonus
         if curr_targets > 0:
             components['stability'] = self.target_stability_bonus
         
-        # 3. DISTANCE-BASED SHAPING - FIXED: Now meaningful!
+        # Distance-based shaping
         if pushed_box and target_change == 0 and prev_distance is not None:
-            # Reward getting closer to targets
             distance_improvement = prev_distance - curr_distance
             max_distance = (self.level_width() + self.level_height()) * self.num_targets()
             
             if max_distance > 0:
-                # FIXED: 0.1 magnitude (was 0.005)
                 normalized_improvement = distance_improvement / max_distance
                 components['distance'] = 0.1 * normalized_improvement
         
-        # 4. EFFICIENCY REWARDS
+        # Efficiency rewards
         if solved:
-            # Huge completion bonus, scaled by efficiency
-            optimal_steps = 20  # Rough estimate
+            num_boxes = self.num_targets()
+            optimal_steps = num_boxes * 10  # Rough estimate
             efficiency_bonus = max(0.5, optimal_steps / max(self.step_count, 1))
             components['efficiency'] = 10.0 * efficiency_bonus
-            print(f"🎉 PUZZLE SOLVED in {self.step_count} steps! Efficiency bonus: {components['efficiency']:.2f}")
         
-        # 5. ANTI-HACKING PENALTIES - FIXED: Gentler
+        # Anti-hacking penalties
         if self.box_oscillation_penalty > 0:
             components['anti_hack'] = -self.box_oscillation_penalty
             
-        # Penalize excessive pushing without progress (but give more exploration time)
-        if self.push_count > 30:  # FIXED: Was 20
+        if self.push_count > 30:
             useless_ratio = self.useless_push_count / self.push_count
-            if useless_ratio > 0.5:  # FIXED: Was 0.3
-                # FIXED: Using gentler strength (0.5 vs 2.0)
+            if useless_ratio > 0.5:
                 components['anti_hack'] -= 0.1 * useless_ratio * self.anti_hacking_strength
         
         return components
@@ -298,13 +374,13 @@ class OptimizedSokobanEnv(gym.Env):
         obs = self.game.get_observation()
         obs_array = np.array(obs, dtype=np.int32)
         
-        # Pad to 100 elements if shorter
-        if len(obs_array) < 100:
-            padded = np.zeros(100, dtype=np.int32)
+        # Pad to 200 elements (supports larger levels)
+        if len(obs_array) < 200:
+            padded = np.zeros(200, dtype=np.int32)
             padded[:len(obs_array)] = obs_array
             return padded
         else:
-            return obs_array[:100]
+            return obs_array[:200]
     
     def _get_info(self, reward_components: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         return {
@@ -316,14 +392,32 @@ class OptimizedSokobanEnv(gym.Env):
             'useless_push_ratio': self.useless_push_count / max(1, self.push_count),
             'reward_components': reward_components or {},
             'difficulty_level': self.difficulty_level,
-            'solved_step': self.solved_step
+            'solved_step': self.solved_step,
+            'level_width': self.level_width(),
+            'level_height': self.level_height()
         }
     
     def set_difficulty(self, level: int):
         """Set curriculum difficulty level"""
-        self.difficulty_level = min(3, max(1, level))
+        self.difficulty_level = min(4, max(1, level))
         print(f"🎯 Difficulty set to level {self.difficulty_level}")
     
-    def get_success_rate(self) -> float:
-        """Get current success rate (for curriculum progression)"""
-        return 0.0
+    def get_level_statistics(self) -> Dict:
+        """Get statistics for all attempted levels"""
+        return self.level_stats.copy()
+    
+    def print_level_statistics(self):
+        """Print formatted level statistics"""
+        if not self.level_stats:
+            print("No level statistics yet")
+            return
+        
+        print("\n📊 Level Statistics:")
+        print("="*60)
+        for idx in sorted(self.level_stats.keys()):
+            stats = self.level_stats[idx]
+            attempts = stats['attempts']
+            solves = stats['solves']
+            rate = (solves / attempts * 100) if attempts > 0 else 0
+            print(f"  Level {idx:3d}: {solves:3d}/{attempts:3d} solved ({rate:5.1f}%)")
+        print("="*60)

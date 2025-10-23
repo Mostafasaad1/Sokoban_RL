@@ -125,13 +125,18 @@ class OptimizedPPOTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"🖥️  Using device: {self.device}")
         
-        # Create vectorized environments with FIXED settings
+        # Create vectorized environments with MULTI-LEVEL support
         self.envs = [OptimizedSokobanEnv(
-            max_episode_steps=200,  # FIXED: Was 400
-            curriculum_mode=True,   # FIXED: Was False
+            max_episode_steps=200,
+            curriculum_mode=True,
             difficulty_level=1,
-            anti_hacking_strength=0.5  # FIXED: Was 2.0
+            anti_hacking_strength=0.5,
+            level_selection_mode=args.level_mode  # NEW: random, sequential, or curriculum
         ) for _ in range(args.num_envs)]
+        
+        # Track level diversity
+        self.level_encounters = {}  # Track which levels are seen
+        self.last_stats_print = 0
         
         # Initialize curriculum manager
         self.curriculum = CurriculumManager(
@@ -404,7 +409,8 @@ def main():
                        help='Total training timesteps')
     parser.add_argument('--learning-rate', type=float, default=3e-4, 
                        help='Learning rate (FIXED: was 30e-4)')
-    
+    parser.add_argument('--level_mode', type=str, default='random', 
+                       help='level_mode (random / sequential / curriculum)')
     args = parser.parse_args()
     
     # Print fixes applied
