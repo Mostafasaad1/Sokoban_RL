@@ -7,18 +7,10 @@ import torch.optim as optim
 from collections import deque
 from typing import Dict, List, Tuple
 
-from optimized_sokoban_env import OptimizedSokobanEnv
+from sokoban_env import OptimizedSokobanEnv
 
 class FixedPPONetwork(nn.Module):
-    """
-    FIXED PPO network with proper sizing and normalization.
-    
-    Changes:
-    - Reduced from 768 to 256 hidden units (right-sized for 100-dim input)
-    - Added LayerNorm for training stability
-    - Added input normalization (divide by 6.0)
-    - Proper weight initialization (small gains)
-    """
+
     
     def __init__(self, obs_shape: Tuple[int, ...], num_actions: int, hidden_size: int = 256):
         super().__init__()
@@ -412,26 +404,7 @@ def main():
     parser.add_argument('--level_mode', type=str, default='random', 
                        help='level_mode (random / sequential / curriculum)')
     args = parser.parse_args()
-    
-    # Print fixes applied
-    print("\n" + "="*80)
-    print("🔧 FIXES APPLIED:")
-    print("="*80)
-    print("✅ Learning rate: 30e-4 → 3e-4 (10x reduction)")
-    print("✅ Reward balance: +0.5/-2.0 → +1.0/-1.0 (symmetric)")
-    print("✅ Step penalty: -0.002 → -0.01 (5x increase)")
-    print("✅ Network size: 768 → 256 hidden units")
-    print("✅ Distance rewards: 0.005 → 0.1 (20x increase)")
-    print("✅ Anti-hacking: 2.0 → 0.5 strength")
-    print("✅ Episode length: 400 → 200 steps")
-    print("✅ Batch size: 256 → 128")
-    print("✅ PPO epochs: 4 → 8")
-    print("✅ Clip range: 0.8-1.2 → 0.9-1.1")
-    print("✅ Entropy coef: 0.02 → 0.03")
-    print("✅ Added input normalization (x/6.0)")
-    print("✅ Added LayerNorm throughout network")
-    print("="*80 + "\n")
-    
+
     trainer = OptimizedPPOTrainer(args)
     trainer.train()
 
