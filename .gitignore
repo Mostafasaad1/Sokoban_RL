@@ -51,3 +51,4 @@ testing_log.txt
 *.o
 *.ink
 runs/*
+ignoreFolder
