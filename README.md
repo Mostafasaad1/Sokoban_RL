@@ -1,240 +1,225 @@
-# Sokoban Engine
+# Sokoban Reinforcement Learning Environment
 
-A high-performance, C++20 Sokoban game engine designed for reinforcement learning applications.
+A high-performance Sokoban environment built in C++ with Python bindings, designed specifically for reinforcement learning research and training.
 
-## Features
+## 🚀 Features
 
-- **Modern C++20**: Uses `std::span`, `std::ranges`, `constexpr`, and other C++20 features
-- **Performance Optimized**: Minimal allocations in game loop, optimized for RL training
-- **Python Integration**: Ready for `pybind11` bindings
-- **Configurable**: Customizable grid sizes and level loading
-- **Complete Game Logic**: Full Sokoban rules implementation
-- **Sparse Rewards**: Designed for reinforcement learning with +1.0 reward on completion
+- **High-Performance Engine**: Optimized C++20 core with Python bindings via pybind11
+- **Reinforcement Learning Ready**: Gym-like interface with multi-level support
+- **Advanced Visualization**: Real-time gameplay visualization with PyGame
+- **Curriculum Learning**: Progressive difficulty with 50+ levels across 4 difficulty tiers
+- **PPO Implementation**: Complete Proximal Policy Optimization training pipeline
+- **Multi-Level Support**: Random, sequential, and curriculum-based level selection
 
-## Building
+## 📁 Project Structure
 
-### C++ Only
+```
+sokoban-rl/
+├── 🏗️ Core Engine
+│   ├── sokoban.h/cpp          # C++ game engine
+│   ├── python_bindings.cpp    # Python interface
+│   └── test_sokoban.cpp       # Unit tests
+├── 🧠 Reinforcement Learning
+│   ├── sokoban_env.py         # Gym environment wrapper
+│   ├── Train_sokoban_ppo.py   # PPO training script
+│   ├── sokoban_levels.py      # 50+ level collection
+│   └── Model_player.py        # Trained model visualizer
+├── 🎨 Visualization
+│   ├── visualize_sokoban.py   # Matplotlib visualization
+│   ├── rl_visualization_demo.py # Training visualization
+│   └── demo_visualization.py  # Demo scripts
+└── 📚 Examples & Tests
+    ├── example_usage.py       # Basic usage examples
+    └── test_improvements.py   # Environment testing
+```
+
+## 🛠️ Installation & Setup
+
+### Prerequisites
+
 ```bash
-# Compile the engine
-g++ -std=c++20 -O3 -Wall sokoban.cpp -c -o sokoban.o
+# C++ Compiler (C++20 support)
+sudo apt install g++-11  # Ubuntu/Debian
+brew install gcc         # macOS
+
+# Python dependencies
+pip install torch gymnasium pygame matplotlib numpy
+pip install pybind11
+```
+
+### Building the C++ Engine
+
+```bash
+# Compile Python bindings
+cd sokoban
+make all 
 
 # Run tests
-g++ -std=c++20 -O3 -Wall test_sokoban.cpp sokoban.cpp -o test_sokoban
 ./test_sokoban
 ```
 
-### Python Bindings
-```bash
-# Install pybind11
-pip install pybind11
+## 🎮 Quick Start
 
-# Compile Python module
-c++ -O3 -Wall -shared -std=c++20 -fPIC `python3 -m pybind11 --includes` \
-    python_bindings.cpp sokoban.cpp -o sokoban_engine`python3-config --extension-suffix`
-
-# Run Python example
-python3 example_usage.py
-```
-
-### Visualization
-```bash
-# Install visualization dependencies
-pip install matplotlib pillow
-
-# Generate demo visualizations
-make demo-viz
-
-# Interactive gameplay with graphics
-make interactive
-
-# RL training visualization demo
-make rl-demo
-```
-
-## API Reference
-
-### Core Methods
-
-```cpp
-class Sokoban {
-public:
-    Sokoban();  // Creates default 10x10 level
-    Sokoban(int width, int height = 10);
-    
-    void reset();
-    void load_level(const std::string& level_str);
-    std::tuple<std::vector<int>, float, bool> step(int action);
-    std::vector<int> get_observation() const;
-    std::vector<std::vector<int>> get_grid() const;
-    bool is_solved() const;
-    bool is_valid_action(int action) const;
-};
-```
-
-### Tile Types
-- `WALL = 0`: Impassable wall
-- `EMPTY = 1`: Empty floor
-- `PLAYER = 2`: Player character
-- `BOX = 3`: Moveable box
-- `TARGET = 4`: Target location for boxes
-- `BOX_ON_TARGET = 5`: Box correctly placed
-- `PLAYER_ON_TARGET = 6`: Player standing on target
-
-### Actions
-- `UP = 0`: Move up
-- `DOWN = 1`: Move down
-- `LEFT = 2`: Move left
-- `RIGHT = 3`: Move right
-
-## Level Format
-
-Levels are defined using ASCII strings:
-```
-"########\n"
-"# .  @ #\n"
-"# $    #\n"
-"#   .  #\n"
-"########"
-```
-
-Symbols:
-- `#`: Wall
-- ` `: Empty space
-- `@`: Player
-- `$`: Box
-- `.`: Target
-- `*`: Box on target
-- `+`: Player on target
-
-## Python Usage
+### Basic Usage
 
 ```python
 import sokoban_engine
 
-# Create game
+# Create game instance
 game = sokoban_engine.Sokoban()
 
-# Game loop
-while True:
-    obs, reward, done = game.step(action)
-    if done:
-        game.reset()
+# Basic gameplay loop
+obs, reward, done = game.step(game.RIGHT)
+print(f"Reward: {reward}, Solved: {done}")
 ```
 
-### Visualization Usage
+### RL Environment Usage
 
 ```python
-from visualize_sokoban import SokobanVisualizer
-import sokoban_engine
+from sokoban_env import OptimizedSokobanEnv
 
-# Create game and visualizer
-game = sokoban_engine.Sokoban()
-visualizer = SokobanVisualizer(game)
+env = OptimizedSokobanEnv(
+    max_episode_steps=200,
+    level_selection_mode='random'
+)
 
-# Render static image
-visualizer.render_static('game_state.png')
-
-# ASCII output
-visualizer.print_ascii()
-
-# Interactive gameplay
-visualizer.interactive_play()
-
-# Animate action sequence
-actions = [game.RIGHT, game.DOWN, game.LEFT]
-visualizer.animate_sequence(actions, 'gameplay.gif')
+obs, info = env.reset()
+action = env.action_space.sample()
+obs, reward, done, truncated, info, action_tracker = env.step(action)
 ```
 
-## Visualization Features
+## 🏋️ Training the Agent
 
-### 🎨 Comprehensive Visualization Suite
+### PPO Training
 
-The engine includes powerful visualization capabilities for development, debugging, and presentation:
-
-**Static Rendering**
-- High-quality matplotlib-based graphics
-- Customizable color schemes and symbols
-- Automatic legend generation
-- Export to PNG/JPG formats
-
-**Animation Support**
-- Action sequence animation
-- GIF and MP4 export
-- Configurable frame rates
-- Progress indicators
-
-**Interactive Features**
-- Real-time gameplay visualization
-- ASCII art rendering for terminal use
-- Interactive controls (WASD movement)
-- Live game statistics
-
-**RL Integration**
-- Training progress visualization
-- Episode statistics tracking
-- Multi-level difficulty demonstrations
-- Performance benchmarking charts
-
-### 🖼️ Visualization Scripts
-
-<filepath>visualize_sokoban.py</filepath> - Main visualization class with full feature set
-<filepath>demo_visualization.py</filepath> - Generate demonstration images
-<filepath>rl_visualization_demo.py</filepath> - RL training visualization examples
-
-**Quick Start:**
 ```bash
-# Generate demo images
-make demo-viz
-
-# Interactive gameplay
-make interactive  
-
-# RL training demo
-make rl-demo
+python Train_sokoban_ppo.py \
+    --num-envs 8 \
+    --num-steps 256 \
+    --total-timesteps 2000000 \
+    --learning-rate 3e-4 \
+    --level_mode random
 ```
 
-**Features:**
-- 🎯 Multiple tile visualization styles
-- 📊 Training progress charts
-- 🎮 Interactive gameplay modes
-- 📹 Animation and recording
-- 🔬 Performance benchmarking
-- 🎨 Customizable themes and colors
+**Training Features:**
+- 🎯 Multi-environment parallel training
+- 📚 Automatic curriculum learning
+- 🧠 Fixed network architecture (256 hidden units)
+- 📊 Comprehensive training statistics
+- 💾 Automatic model checkpointing
 
-## Performance
+### Training Arguments
 
-Benchmarked at >100,000 steps/second on modern hardware, making it suitable for intensive RL training.
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--num-envs` | 8 | Number of parallel environments |
+| `--num-steps` | 256 | Steps per rollout |
+| `--total-timesteps` | 2M | Total training steps |
+| `--learning-rate` | 3e-4 | Optimizer learning rate |
+| `--level_mode` | random | Level selection strategy |
 
-## Design Goals
+## 🎨 Visualization
 
-1. **Minimal Latency**: Optimized for high-frequency RL training
-2. **Standard Compliance**: Uses modern C++20 features appropriately
-3. **Memory Efficient**: Pre-allocated buffers, minimal dynamic allocation
-4. **Deterministic**: Reproducible behavior for scientific research
-5. **Extensible**: Clean interface for additional features
+### Real-time Gameplay
 
-## Default Level
-
-The engine includes a simple 7×7 test level:
-```
-#######
-#  .  #
-# $ @ #
-#     #
-# $   #
-#  .  #
-#######
-```
-
-## Testing
-
-Comprehensive unit tests cover:
-- Basic game mechanics
-- Level loading and parsing
-- Performance benchmarking
-- Edge cases and error handling
-
-Run tests with:
 ```bash
-./test_sokoban
+python Model_player.py --model-path trained_model.pt --level-mode random
 ```
+
+**Visualization Features:**
+- 🎮 Interactive gameplay with keyboard controls
+- 📊 Real-time statistics and performance metrics
+- 🗺️ Multi-level progression tracking
+- ⚡ Turbo mode for fast evaluation
+
+### Visualization Controls
+
+| Key | Action |
+|-----|--------|
+| `SPACE` | Pause/resume |
+| `R` | Reset current level |
+| `N` | Next level |
+| `T` | Toggle turbo mode |
+| `+/-` | Adjust simulation speed |
+| `ESC` | Quit |
+
+## 📊 Level System
+
+### Difficulty Tiers
+
+- **Easy (8 levels)**: Simple puzzles, 1-2 boxes
+- **Medium (10 levels)**: Strategic planning required
+- **Hard (8 levels)**: Complex box arrangements
+- **Expert (4 levels)**: Advanced puzzle solving
+- **Mixed (10 levels)**: Varied layouts and challenges
+
+### Level Selection Modes
+
+- **Random**: Random level selection each episode
+- **Sequential**: Progress through levels in order
+- **Curriculum**: Adaptive selection based on performance
+
+## 🧠 RL Algorithm Details
+
+### Network Architecture
+
+```python
+FixedPPONetwork(
+    obs_shape=(200,),      # Flattened grid observation
+    num_actions=4,         # UP, DOWN, LEFT, RIGHT
+    hidden_size=256        # Optimized for Sokoban
+)
+```
+
+### Reward Structure
+
+- **Base Reward**: +1.0 for solving the level
+- **Progress Reward**: Incremental rewards for box placement
+- **Distance Reward**: Shaping based on box-target distances
+- **Efficiency Bonus**: Reward for solving in fewer steps
+- **Anti-hacking**: Penalties for repetitive/oscillating behavior
+
+## 📈 Performance
+
+- **Engine**: >100,000 steps/second on modern hardware
+- **Training**: ~1-2 million steps for competent performance
+- **Memory**: Efficient C++ backend with minimal Python overhead
+
+## 🔧 Customization
+
+### Adding Custom Levels
+
+```python
+custom_levels = [
+    """
+    ########
+    #  .   #
+    # $@$  #
+    #  .   #
+    ########
+    """
+]
+
+env = OptimizedSokobanEnv(custom_levels=custom_levels)
+```
+
+### Modifying Reward Structure
+
+Override the `_compute_advanced_reward` method in `sokoban_env.py` to implement custom reward functions.
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **ImportError: No module named 'sokoban_engine'**
+   - Ensure C++ bindings are compiled correctly
+   - Check Python path includes the build directory
+
+2. **Poor Training Performance**
+   - Adjust `--learning-rate` (try 1e-4 to 1e-3)
+   - Increase `--num-envs` for more parallel environments
+   - Modify network architecture in `FixedPPONetwork`
+
+3. **Visualization Issues**
+   - Ensure PyGame and matplotlib are installed
+   - Check display permissions for GUI applications
